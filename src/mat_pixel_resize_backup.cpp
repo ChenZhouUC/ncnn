@@ -598,7 +598,7 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
     double scale_x = (double)srcw / w;
     double scale_y = (double)srch / h;
 
-    int* buf = new int[w + h + w + h + 1];
+    int* buf = new int[w + h + w + h];
 
     int* xofs = buf;//new int[w];
     int* yofs = buf + w;//new int[h];
@@ -690,42 +690,17 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
             rows0 = rows1;
             rows1 = rows0_old;
             const unsigned char *S1 = src + srcw * (sy+3);
+
             const short* ialphap = ialpha;
+            short* rows1p = rows1;
             for ( int dx = 0; dx < w; dx++ )
             {
                 int sx = xofs[dx];
-                
-                short* rows1p = rows1 + dx * 3;
-                const unsigned char* S1p = S1 + sx;
-#if __ARM_NEON
-#if __aarch64__
-
-                asm volatile (
-
-                "ld1 {v2.4h}, [%[ialphap]], #8  \n"
-                "dup v0.4h, v2.h[0]             \n"
-                "dup v1.4h, v2.h[1]             \n"
-
-                "ld1 {v4.8b}, [%[S1p]], #8      \n"
-                "ushll v5.8h, v4.8b, #0         \n"
-                "dup v6.2d, v5.d[1]             \n"
-                "ext v7.8b, v5.8b, v6.8b, #6    \n"
-
-                "smull v16.4s, v5.4h, v0.4h     \n"
-                "smlal v16.4s, v7.4h, v1.4h     \n"
-                "shrn v17.4h, v16.4s, #4        \n"
-                "st1 {v17.4h}, [%[rows1p]], #8  \n"
-
-                : [rows1p] "+r"(rows1p)   // %0
-                : [ialphap] "r"(ialphap), // %1 x9
-                [S1p] "r"(S1p)  // %2
-                : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v16", "v17"
-                );
-
-#else
                 short a0 = ialphap[0];
                 short a1 = ialphap[1];
 
+                const unsigned char* S1p = S1 + sx;
+#if __ARM_NEON
                 int16x4_t _a0 = vdup_n_s16(a0);
                 int16x4_t _a1 = vdup_n_s16(a1);
                 uint8x8_t _S1 = uint8x8_t();
@@ -744,15 +719,14 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
                 _rows1 = vmlal_s16(_rows1, _S1high, _a1);
                 int16x4_t _rows1_sr4 = vshrn_n_s32(_rows1, 4);
                 vst1_s16(rows1p, _rows1_sr4);
-#endif //__aarch64__
 #else
-                short a0 = ialphap[0];
-                short a1 = ialphap[1];
                 rows1p[0] = (S1p[0]*a0 + S1p[3]*a1) >> 4;
                 rows1p[1] = (S1p[1]*a0 + S1p[4]*a1) >> 4;
                 rows1p[2] = (S1p[2]*a0 + S1p[5]*a1) >> 4;
 #endif // __ARM_NEON
+
                 ialphap += 2;
+                rows1p += 3;
             }
         }
         else
@@ -760,53 +734,19 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
             // hresize two rows
             const unsigned char *S0 = src + srcw * (sy);
             const unsigned char *S1 = src + srcw * (sy+3);
+
             const short* ialphap = ialpha;
+            short* rows0p = rows0;
+            short* rows1p = rows1;
             for ( int dx = 0; dx < w; dx++ )
             {
                 int sx = xofs[dx];
+                short a0 = ialphap[0];
+                short a1 = ialphap[1];
 
-                short* rows0p = rows0 + dx * 3;
-                short* rows1p = rows1 + dx * 3;
-                
                 const unsigned char* S0p = S0 + sx;
                 const unsigned char* S1p = S1 + sx;
 #if __ARM_NEON
-#if __aarch64__
-                asm volatile (
-
-                "ld1 {v2.4h}, [%[ialphap]], #8  \n"
-                "dup v0.4h, v2.h[0]             \n"
-                "dup v1.4h, v2.h[1]             \n"
-
-                "ld1 {v4.8b}, [%[S0p]], #8      \n"
-                "ld1 {v18.8b}, [%[S1p]], #8     \n"
-                "ushll v5.8h, v4.8b, #0         \n"
-                "ushll v19.8h, v18.8b, #0       \n"
-                "dup v6.2d, v5.d[1]             \n"
-                "dup v20.2d, v19.d[1]           \n"
-                "ext v7.8b, v5.8b, v6.8b, #6    \n"
-                "ext v21.8b, v19.8b, v20.8b, #6 \n"
-
-                "smull v16.4s, v5.4h, v0.4h     \n"
-                "smull v22.4s, v19.4h, v0.4h    \n"
-                "smlal v16.4s, v7.4h, v1.4h     \n"
-                "smlal v22.4s, v21.4h, v1.4h    \n"
-                "shrn v17.4h, v16.4s, #4        \n"
-                "shrn v23.4h, v22.4s, #4        \n"
-                "st1 {v17.4h}, [%[rows0p]], #8  \n"
-                "st1 {v23.4h}, [%[rows1p]], #8  \n"
-
-                : [rows0p] "+r"(rows0p),   // %0
-                [rows1p] "+r"(rows1p)  // %1
-                : [ialphap] "r"(ialphap), // %2 x9
-                [S0p] "r"(S0p),  // %3
-                [S1p] "r"(S1p)  // %4
-                : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
-                );
-
-#else                
-                short a0 = ialphap[0];
-                short a1 = ialphap[1];
                 int16x4_t _a0 = vdup_n_s16(a0);
                 int16x4_t _a1 = vdup_n_s16(a1);
                 uint8x8_t _S0 = uint8x8_t();
@@ -840,30 +780,24 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
                 int16x4_t _rows1_sr4 = vshrn_n_s32(_rows1, 4);
                 vst1_s16(rows0p, _rows0_sr4);
                 vst1_s16(rows1p, _rows1_sr4);
-
-#endif //__aarch64__                
 #else
-                short a0 = ialphap[0];
-                short a1 = ialphap[1];
                 rows0p[0] = (S0p[0]*a0 + S0p[3]*a1) >> 4;
                 rows0p[1] = (S0p[1]*a0 + S0p[4]*a1) >> 4;
                 rows0p[2] = (S0p[2]*a0 + S0p[5]*a1) >> 4;
                 rows1p[0] = (S1p[0]*a0 + S1p[3]*a1) >> 4;
                 rows1p[1] = (S1p[1]*a0 + S1p[4]*a1) >> 4;
                 rows1p[2] = (S1p[2]*a0 + S1p[5]*a1) >> 4;
-
 #endif // __ARM_NEON
 
-            ialphap += 2;
-
-                
+                ialphap += 2;
+                rows0p += 3;
+                rows1p += 3;
             }
         }
 
         prev_sy1 = sy;
 
         // vresize
-
         short b0 = ibeta[0];
         short b1 = ibeta[1];
 
@@ -880,55 +814,40 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
 
 #if __ARM_NEON
 #if __aarch64__
-        
-        if (nn > 0)
+        int16x4_t _b0 = vdup_n_s16(b0);
+        int16x4_t _b1 = vdup_n_s16(b1);
+        int32x4_t _v2 = vdupq_n_s32(2);
+        for (; nn>0; nn--)
         {
-            asm volatile (
+            int16x4_t _rows0p_sr4 = vld1_s16(rows0p);
+            int16x4_t _rows1p_sr4 = vld1_s16(rows1p);
+            int16x4_t _rows0p_1_sr4 = vld1_s16(rows0p+4);
+            int16x4_t _rows1p_1_sr4 = vld1_s16(rows1p+4);
 
-            "ld1 {v2.4h}, [%2], #8      \n"
-            "dup v0.4h, v2.h[0]         \n"
-            "dup v1.4h, v2.h[1]         \n"
-            "mov w6, #2                 \n"
-            "dup v3.4s, w6              \n"
-            "mov w7, %w1                \n"
+            int32x4_t _rows0p_sr4_mb0 = vmull_s16(_rows0p_sr4, _b0);
+            int32x4_t _rows1p_sr4_mb1 = vmull_s16(_rows1p_sr4, _b1);
+            int32x4_t _rows0p_1_sr4_mb0 = vmull_s16(_rows0p_1_sr4, _b0);
+            int32x4_t _rows1p_1_sr4_mb1 = vmull_s16(_rows1p_1_sr4, _b1);
 
-            "1:                         \n"
-            "ld1 {v4.8h}, [%3], #16     \n"
-            "ld1 {v5.8h}, [%4], #16     \n"
-            "dup v6.2d, v4.d[1]         \n"
-            "dup v7.2d, v5.d[1]         \n"
+            int32x4_t _acc = _v2;
+            _acc = vsraq_n_s32(_acc, _rows0p_sr4_mb0, 16);
+            _acc = vsraq_n_s32(_acc, _rows1p_sr4_mb1, 16);
 
-            "mov v20.16b, v3.16b        \n"
-            "mov v21.16b, v3.16b        \n"
+            int32x4_t _acc_1 = _v2;
+            _acc_1 = vsraq_n_s32(_acc_1, _rows0p_1_sr4_mb0, 16);
+            _acc_1 = vsraq_n_s32(_acc_1, _rows1p_1_sr4_mb1, 16);
 
-            "smull v16.4s, v4.4h, v0.4h \n"
-            "smull v17.4s, v5.4h, v1.4h \n"
-            "smull v18.4s, v6.4h, v0.4h \n"
-            "smull v19.4s, v7.4h, v1.4h \n"
+            int16x4_t _acc16 = vshrn_n_s32(_acc, 2);
+            int16x4_t _acc16_1 = vshrn_n_s32(_acc_1, 2);
 
-            "ssra v20.4s, v16.4s, #16   \n"
-            "ssra v21.4s, v18.4s, #16   \n"
-            "ssra v20.4s, v17.4s, #16   \n"
-            "ssra v21.4s, v19.4s, #16   \n"
+            uint8x8_t _D = vqmovun_s16(vcombine_s16(_acc16, _acc16_1));
 
-            "shrn v22.4h, v20.4s, #2    \n"
-            "shrn v23.4h, v21.4s, #2    \n"
-            "mov v22.d[1], v23.d[0]     \n"
+            vst1_u8(Dp, _D);
 
-            "sqxtun v24.8b, v22.8h      \n"
-            "subs  w7, w7, #1           \n"
-            "st1 {v24.8b}, [%0], #8     \n"
-            "bgt 1b                     \n"
-
-            : "+r"(Dp) // %0
-            : "r"(nn), // %1
-            "r"(ibeta), // %2 x9
-            "r"(rows0p), // %3
-            "r"(rows1p) // %4
-            : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24"
-            );
+            Dp += 8;
+            rows0p += 8;
+            rows1p += 8;
         }
-        
 #else
         if (nn > 0)
         {
@@ -977,7 +896,6 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
             : "cc", "memory", "r4", "q0", "q1", "q2", "q3", "q8", "q9", "q10", "q11", "q12"
         );
         }
-
 #endif // __aarch64__
 #endif // __ARM_NEON
         for ( ; remain; --remain )
@@ -987,7 +905,6 @@ void resize_bilinear_c3(const unsigned char* src, int srcw, int srch, unsigned c
         }
 
         ibeta += 2;
-
     }
 
     delete[] buf;
